@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set "VIRTUAL_ENV=C:\Users\k.Rakesh\OneDrive\Desktop\ai\venv"
+set "VIRTUAL_ENV=C:\Users\mohan\OneDrive\Desktop\ai - Copy (2)\ai - Copy\venv"
 
 if not defined PROMPT set PROMPT=$P$G
 
