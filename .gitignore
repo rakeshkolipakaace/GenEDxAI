@@ -6,7 +6,6 @@
 # API Keys and credentials
 *.key
 *.pem
-secrets.toml
 .streamlit/secrets.toml
 
 # Python
