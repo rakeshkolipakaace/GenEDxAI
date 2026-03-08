@@ -136,10 +136,25 @@
 
 
 from utils.chatbot import get_learning_response
+import re
 
-def generate_exam(topic):
+def generate_exam(topic, difficulty="medium", num_questions=5):
+    """Generate exam with configurable difficulty and number of questions
+    
+    Args:
+        topic: Topic for the exam
+        difficulty: 'easy', 'medium', or 'hard'
+        num_questions: Number of questions (5-20)
+    """
+    difficulty_prompt = {
+        "easy": "Generate simple, beginner-level questions.",
+        "medium": "Generate moderate difficulty questions.",
+        "hard": "Generate challenging, advanced-level questions that require deep understanding."
+    }
+    
     prompt = (
-        f"Generate 5 multiple-choice questions on '{topic}'.\n"
+        f"Generate {num_questions} multiple-choice questions on '{topic}'.\n"
+        f"{difficulty_prompt.get(difficulty, 'Generate moderate difficulty questions.')}\n"
         f"For each question, provide the question text followed by four options labeled a), b), c), d), "
         f"each on its own line with no extra text or formatting.\n"
         f"Number questions as 1., 2., etc.\n"
@@ -152,100 +167,102 @@ def generate_exam(topic):
         f"d) Option 4\n"
     )
     response = get_learning_response(prompt).strip()
-    return format_questions_to_html(response)
+    return parse_questions(response)
 
-def format_questions_to_html(text):
+def parse_questions(text):
+    """Parse questions into structured format for button selection"""
     lines = text.splitlines()
-    html = ['<div style="font-family: Arial; margin: 20px;">']
+    questions = []
     current_question = None
+    current_options = {}
+    
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        if line[0].isdigit() and line[1] == '.':  # Question line
+        
+        # Check if it's a question line (starts with digit followed by period)
+        if re.match(r'^\d+\.\s', line):
             if current_question:
-                html.append('</div>')
-            html.append(f'<div style="margin-top: 15px; font-weight: bold;">{line}</div><div style="margin-left: 20px;">')
-            current_question = line
-        else:  # Option line
-            # Handle options on the same line (e.g., "a) ... b) ... c) ... d) ...")
-            if ' b) ' in line or ' c) ' in line or ' d) ' in line:
-                # Split by option delimiters
-                parts = line.replace(' b) ', '||b) ').replace(' c) ', '||c) ').replace(' d) ', '||d) ').split('||')
-                for opt in parts:
-                    opt = opt.strip()
-                    if opt:
-                        html.append(f'<div>{opt}</div>')
-            else:
-                html.append(f'<div>{line}</div>')
+                questions.append({
+                    "question": current_question,
+                    "options": current_options
+                })
+            current_question = re.sub(r'^\d+\.\s', '', line)
+            current_options = {}
+        
+        # Check if it's an option line (a), b), c), d))
+        elif re.match(r'^[a-d]\)\s', line):
+            option_key = line[0]
+            option_text = re.sub(r'^[a-d]\)\s*', '', line)
+            current_options[option_key] = option_text
+    
+    # Don't forget the last question
     if current_question:
-        html.append('</div>')
-    html.append('</div>')
-    return '\n'.join(html)
+        questions.append({
+            "question": current_question,
+            "options": current_options
+        })
+    
+    return questions
 
 def extract_option(answer):
-    for char in answer.lower():
+    """Extract option letter (a, b, c, d) from user input"""
+    for char in str(answer).lower():
         if char in 'abcd':
             return char
     return None
 
-def evaluate_exam(questions, user_answers):
+def evaluate_exam(questions_list, user_answers_dict):
+    """Evaluate exam with answers stored as a dictionary {question_index: option}"""
+    # Convert questions_list to text format for API calls
+    questions_text = "\n".join([
+        f"{i+1}. {q['question']}\n" +
+        "\n".join([f"{opt}) {text}" for opt, text in q['options'].items()])
+        for i, q in enumerate(questions_list)
+    ])
+    
+    num_questions = len(questions_list)
+    
     # Get correct answers
     answer_prompt = (
         f"For these questions, provide only the correct answer letters (a, b, c, or d), "
-        f"one per line, in order:\n{questions}"
+        f"one per line, in order:\n{questions_text}"
     )
     correct_answers = get_learning_response(answer_prompt).strip().splitlines()
 
     # Get explanations
     explanation_prompt = (
         f"For these questions, provide a one-line explanation for each correct answer, "
-        f"one per line, numbered 1. to 5. (e.g., '1. Explanation text'):\n{questions}"
+        f"one per line, numbered 1. to {num_questions}. (e.g., '1. Explanation text'):\n{questions_text}"
     )
     explanations = get_learning_response(explanation_prompt).strip().splitlines()
 
-    user_answers = user_answers.strip().splitlines()
     marks = 0
-    feedback_html = ['<div style="font-family: Arial; margin: 20px;">']
+    feedback_html = ['<div style="font-family: Arial; margin: 20px; color: #fff;">']
 
-    for i in range(5):
-        user_opt = extract_option(user_answers[i]) if i < len(user_answers) else None
+    for i in range(len(questions_list)):
+        user_opt = user_answers_dict.get(i)
         correct_opt = extract_option(correct_answers[i]) if i < len(correct_answers) else None
         explanation = explanations[i].replace(f"{i+1}. ", "").strip() if i < len(explanations) else ""
 
-        if user_opt == correct_opt:
+        if user_opt and user_opt.lower() == correct_opt:
             marks += 1
         else:
             feedback_html.append(
-                f'<div style="margin-top: 10px;">'
-                f'Q{i+1}: Your Answer: {user_opt or "None"}<br>'
-                f'Correct Answer: {correct_opt})<br>'
-                f'Explanation: {explanation}'
+                f'<div style="margin-top: 10px; padding: 12px; background-color: #2a2a2a; border-left: 4px solid #f44336; border-radius: 5px; color: #fff;">'
+                f'<strong style="color: #f44336; font-size: 16px;">Q{i+1}: Your Answer: {user_opt or "Not Answered"}</strong><br>'
+                f'<strong style="color: #4CAF50; font-size: 16px;">Correct Answer: {correct_opt}</strong><br>'
+                f'<span style="color: #bbb; font-style: italic; font-size: 15px;">Explanation: {explanation}</span>'
                 f'</div>'
             )
 
-    if len(feedback_html) == 1:  # No mistakes
-        feedback_html.append('<div style="margin-top: 10px;">🎉 No mistakes!</div>')
+    if marks == len(questions_list):
+        feedback_html.append('<div style="margin-top: 20px; padding: 15px; background-color: #1b5e20; border-radius: 5px; color: #4CAF50;"><h3 style="margin: 0; font-size: 18px;">🎉 Perfect! All answers correct!</h3></div>')
+    elif marks > 0:
+        feedback_html.append(f'<div style="margin-top: 20px; padding: 15px; background-color: #1a1a1a; border-left: 4px solid #FF9800; border-radius: 5px; color: #FF9800;"><h3 style="margin: 0; font-size: 18px;">Good effort! You got {marks}/{len(questions_list)} correct.</h3></div>')
+    else:
+        feedback_html.append('<div style="margin-top: 20px; padding: 15px; background-color: #1a1a1a; border-left: 4px solid #f44336; border-radius: 5px; color: #f44336;"><h3 style="margin: 0; font-size: 18px;">Keep studying! Review the explanations above.</h3></div>')
+    
     feedback_html.append('</div>')
     return marks, '\n'.join(feedback_html)
-
-# Example usage
-if __name__ == "__main__":
-    topic = "Java programming"
-    questions_html = generate_exam(topic)
-    print("📄 Questions (HTML):")
-    print(questions_html)
-
-    user_answers = "a\na\na\na\na"
-    marks, feedback_html = evaluate_exam(questions_html, user_answers)
-    print(f"\n✅ Score: {marks}/5")
-    print("🧠 Feedback (HTML):")
-    print(feedback_html)
-
-    # Save to HTML file
-    with open("exam_output.html", "w") as f:
-        f.write(
-            f'<!DOCTYPE html><html><head><title>Exam</title></head><body>'
-            f'<h2>Java Programming Exam</h2>{questions_html}<h2>Results</h2><p>Score: {marks}/5</p>{feedback_html}'
-            f'</body></html>'
-        )
